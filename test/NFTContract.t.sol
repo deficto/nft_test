@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import "forge-std/Test.sol";
-import "murky/src/Merkle.sol";
 import "../src/NFTContract.sol";
+
+import "forge-std/Test.sol";
 import "forge-std/console.sol";
-import "openzeppelin-contracts/contracts/access/Ownable.sol";
+
+import "murky/src/Merkle.sol";
+import "solady/src/auth/Ownable.sol";
+import "solady/src/accounts/Receiver.sol";
 
 contract NFTTest is Test {
     using stdStorage for StdStorage;
@@ -80,7 +83,7 @@ contract NFTTest is Test {
     }
 
     function test_RevertMintToZeroAddress() public {
-        vm.expectRevert("INVALID_RECIPIENT");
+        vm.expectRevert(ERC721.TransferToZeroAddress.selector);
         nft.mintTo{value: 0.08 ether}(address(0));
     }
 
@@ -106,7 +109,8 @@ contract NFTTest is Test {
     }
 
     function test_UpdateBaseURIAsNotOwner() public {
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xd3ad)));
+        //vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xd3ad)));
+        vm.expectRevert(Ownable.Unauthorized.selector);
         vm.prank(address(0xd3ad));
         nft.setBaseURI("ipfs://0x1234567890");                
     }
@@ -135,7 +139,7 @@ contract NFTTest is Test {
     }
 
     function test_SafeContractReceiver() public {
-        Receiver receiver = new Receiver();
+        MockReceiver receiver = new MockReceiver();
         vm.startPrank(address(receiver));
         vm.deal(address(receiver), 1 ether);
         nft.mintTo{value: 0.08 ether}(address(receiver));
@@ -153,7 +157,7 @@ contract NFTTest is Test {
     function test_RevertUnSafeContractReceiver() public {
         // Adress set to 11, because first 10 addresses are restricted for precompiles
         vm.etch(address(11), bytes("mock code"));
-        vm.expectRevert(bytes(""));
+        vm.expectRevert(ERC721.TransferToNonERC721ReceiverImplementer.selector);
         nft.mintTo{value: 0.08 ether}(address(11));
     }
 
@@ -178,7 +182,7 @@ contract NFTTest is Test {
 
     function test_WithdrawalAsNotOwner() public {
         // Mint an NFT, sending eth to the contract
-        Receiver receiver = new Receiver();
+        MockReceiver receiver = new MockReceiver();
         vm.startPrank(address(receiver));
         vm.deal(address(receiver), 1 ether);
         nft.mintTo{value: nft.MINT_PRICE()}(address(2));
@@ -187,15 +191,12 @@ contract NFTTest is Test {
         vm.stopPrank();
 
         // Confirm that a non-owner cannot withdraw
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xd3ad)));
+        //vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xd3ad)));
+        vm.expectRevert(Ownable.Unauthorized.selector);
         vm.startPrank(address(0xd3ad));
         nft.withdrawPayments(payable(address(0xd3ad)));
         vm.stopPrank();
     }
 }
 
-contract Receiver is ERC721TokenReceiver {
-    function onERC721Received(address, address, uint256, bytes calldata) external pure override returns (bytes4) {
-        return this.onERC721Received.selector;
-    }
-}
+contract MockReceiver is Receiver {}

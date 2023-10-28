@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import "@solmate/tokens/ERC721.sol";
-import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import "@openzeppelin-contracts/contracts/utils/Strings.sol";
-import "@openzeppelin-contracts/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import "solady/src/tokens/ERC721.sol";
+import "solady/src/auth/Ownable.sol";
+import "solady/src/utils/LibString.sol";
+import "solady/src/utils/MerkleProofLib.sol";
+
 
 error MintPriceNotPaid();
 error NoWhiteList();
@@ -14,8 +14,11 @@ error NonExistentTokenURI();
 error NotInWhiteList();
 error WithdrawTransfer();
 
-contract NFT is ERC721, ERC721Royalty, Ownable {
-    using Strings for uint256;
+contract NFT is ERC721, Ownable {
+    using LibString for uint256;
+
+    string private __name;
+    string private __symbol;
 
     string public baseURI;
     bytes32 public merkleRoot;
@@ -28,9 +31,12 @@ contract NFT is ERC721, ERC721Royalty, Ownable {
     uint256 public constant WL_SUPPLY = 1_000;
     uint256 public constant WL_MINT_PRICE = 0.04 ether;
 
-    constructor(string memory _name, string memory _symbol, string memory _baseURI, bytes32 _merkleRoot) ERC721(_name, _symbol) Ownable(msg.sender) {
+    constructor(string memory _name, string memory _symbol, string memory _baseURI, bytes32 _merkleRoot) {
+        __name = _name;
+        __symbol = _symbol;
         baseURI = _baseURI;
         merkleRoot = _merkleRoot;
+        _initializeOwner(msg.sender);
     }
     
     function mintTo(address recipient) public payable returns (uint256) {
@@ -67,6 +73,14 @@ contract NFT is ERC721, ERC721Royalty, Ownable {
         return newTokenId;
     } 
 
+    function name() public view virtual override returns (string memory) {
+        return __name;
+    }
+
+    function symbol() public view virtual override returns (string memory) {
+        return __symbol;
+    }
+
     function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
         if (ownerOf(tokenId) == address(0)) {
             revert NonExistentTokenURI();
@@ -92,6 +106,6 @@ contract NFT is ERC721, ERC721Royalty, Ownable {
 
     function verifyAddress(address recipient, bytes32[] calldata _merkleProof) private view returns (bool) {
         bytes32 leaf = keccak256(abi.encodePacked(recipient));
-        return MerkleProof.verify(_merkleProof, merkleRoot, leaf);
+        return MerkleProofLib.verify(_merkleProof, merkleRoot, leaf);
     }
 }
