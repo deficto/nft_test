@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.21;
 
 import "../src/NFTContract.sol";
 
 import "forge-std/Test.sol";
 import "forge-std/console.sol";
 
-import "murky/src/Merkle.sol";
-import "solady/src/auth/Ownable.sol";
-import "solady/src/accounts/Receiver.sol";
+import "murky/Merkle.sol";
+import "solady/auth/Ownable.sol";
+import "solady/accounts/Receiver.sol";
 
 contract NFTTest is Test {
     using stdStorage for StdStorage;
@@ -26,6 +26,8 @@ contract NFTTest is Test {
         data[3] = keccak256(abi.encodePacked(address(3)));               
         
         nft = new NFT("NFT_tutorial", "TUT", "", merkle.getRoot(data));
+        nft.setAllowGeneralMint(true);
+        nft.setAllowWhitelistMint(true);
     }
 
     function test_Pack() public {
@@ -40,14 +42,31 @@ contract NFTTest is Test {
     }
 
     function test_RevertMintWithoutValue() public {
-        vm.expectRevert(MintPriceNotPaid.selector);
+        vm.expectRevert(NFT.MintPriceNotPaid.selector);
         nft.mintTo(address(1));
+    }
+
+    function test_RevertMintNotAllowed() public {
+        nft.setAllowGeneralMint(false);
+        vm.expectRevert(NFT.GeneralMintNotAllowed.selector);
+        vm.prank(address(2));
+        vm.deal(address(2), 1 ether);
+        nft.mintTo{value: 0.08 ether}(address(2));
+    }
+
+    function test_RevertWhiteListMintNotAllowed() public {
+        nft.setAllowWhitelistMint(false);
+        bytes32[] memory proof = merkle.getProof(data, 2);
+        vm.expectRevert(NFT.WhiteListMintNotAllowed.selector);
+        vm.prank(address(2));
+        vm.deal(address(2), 1 ether);
+        nft.whiteListMintTo{value: 0.04 ether}(address(2), proof);        
     }
 
     function test_RegisteredWhiteListMintPricePaid() public {
         vm.startPrank(address(2));
         vm.deal(address(2), 1 ether);
-        nft.whitelistMint{value: 0.04 ether}(address(2), merkle.getProof(data, 2));
+        nft.whiteListMintTo{value: 0.04 ether}(address(2), merkle.getProof(data, 2));
         vm.stopPrank();
     }
 
@@ -69,6 +88,31 @@ contract NFTTest is Test {
         nft.mintTo{value: 0.07 ether}(address(3));
     }
 
+    function test_MintMultiple() public {
+        vm.prank(address(2));
+        vm.deal(address(2), 1 ether);
+        uint256[] memory tokens = nft.mintTo{value: 0.08 ether * 5}(address(2), 5);
+        assertEq(tokens.length, 5);
+    }
+
+    function test_WhiteListMintMultiple() public {
+        bytes32[] memory proof = merkle.getProof(data, 2);
+        vm.prank(address(2));
+        vm.deal(address(2), 1 ether);
+        uint256[] memory tokens = nft.whiteListMintTo{value: 0.08 ether * 5}(address(2), 5, proof);
+        assertEq(tokens.length, 5);
+    }
+
+    function test_ResellRoyaltyAmount() public {
+        vm.prank(address(2));
+        vm.deal(address(2), 1 ether);
+        uint256[] memory tokens = nft.mintTo{value: 0.08 ether}(address(2));
+        
+        uint256 royaltyAmt;
+        (,royaltyAmt) = nft.royaltyInfo(tokens[0], 1 ether);
+        assertEq(royaltyAmt, (((1 ether) * nft.ROYALTY_PERCENT()) / 1000), "ROYALTY_AMOUNT_INVALID");
+    }
+
     function test_RevertMintMaxSupplyReached() public {
         uint256 slot = stdstore
             .target(address(nft))
@@ -78,7 +122,7 @@ contract NFTTest is Test {
         bytes32 loc = bytes32(slot);
         bytes32 mockedCurrentTokenId = bytes32(abi.encode(10000));
         vm.store(address(nft), loc, mockedCurrentTokenId);
-        vm.expectRevert(MaxSupply.selector);
+        vm.expectRevert(NFT.MaxSupply.selector);
         nft.mintTo{value: 0.08 ether}(address(2));
     }
 
