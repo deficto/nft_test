@@ -2,15 +2,38 @@
 pragma solidity ^0.8.13;
 
 import "forge-std/Test.sol";
+import "murky/src/Merkle.sol";
 import "../src/NFTContract.sol";
+import "forge-std/console.sol";
+import "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 contract NFTTest is Test {
     using stdStorage for StdStorage;
 
+    bytes32[] private data;
+    Merkle private merkle;
     NFT private nft;
 
     function setUp() public {
-        nft = new NFT("NFT_tutorial", "TUT", "");        
+        merkle = new Merkle();
+        data = new bytes32[](4);
+        data[0] = keccak256(abi.encodePacked(address(0)));
+        data[1] = keccak256(abi.encodePacked(address(1)));
+        data[2] = keccak256(abi.encodePacked(address(2)));
+        data[3] = keccak256(abi.encodePacked(address(3)));               
+        
+        nft = new NFT("NFT_tutorial", "TUT", "", merkle.getRoot(data));
+    }
+
+    function test_Pack() public {
+        bytes32 leaf = keccak256(abi.encodePacked(address(1)));
+        assertEq(leaf, data[1]);
+    }
+
+    function test_MerkleProof() public {
+        bytes32[] memory proof = merkle.getProof(data, 2);
+        bool verified = merkle.verifyProof(merkle.getRoot(data), proof, data[2]);
+        assertTrue(verified);
     }
 
     function test_RevertMintWithoutValue() public {
@@ -18,16 +41,29 @@ contract NFTTest is Test {
         nft.mintTo(address(1));
     }
 
-    function test_MintPricePaid() public {
-        nft.mintTo{value: 0.08 ether}(address(1));
+    function test_RegisteredWhiteListMintPricePaid() public {
+        vm.startPrank(address(2));
+        vm.deal(address(2), 1 ether);
+        nft.whitelistMint{value: 0.04 ether}(address(2), merkle.getProof(data, 2));
+        vm.stopPrank();
     }
 
-    function test_MintPriceOverPaid() public {
-        nft.mintTo{value: 0.10 ether}(address(1));
+    function test_MintPricePaid() public {
+        vm.prank(address(2));
+        vm.deal(address(2), 1 ether);
+        nft.mintTo{value: 0.08 ether}(address(2));
+    }
+
+    function test_MintPriceOverPaid() public {        
+        vm.prank(address(2));
+        vm.deal(address(2), 1 ether);
+        nft.mintTo{value: 0.10 ether}(address(2));
     }
 
     function testFail_MintPriceUnderPaid() public {
-        nft.mintTo{value: 0.07 ether}(address(1));
+        vm.prank(address(3));
+        vm.deal(address(3), 0.07 ether);
+        nft.mintTo{value: 0.07 ether}(address(3));
     }
 
     function test_RevertMintMaxSupplyReached() public {
@@ -40,7 +76,7 @@ contract NFTTest is Test {
         bytes32 mockedCurrentTokenId = bytes32(abi.encode(10000));
         vm.store(address(nft), loc, mockedCurrentTokenId);
         vm.expectRevert(MaxSupply.selector);
-        nft.mintTo{value: 0.08 ether}(address(1));
+        nft.mintTo{value: 0.08 ether}(address(2));
     }
 
     function test_RevertMintToZeroAddress() public {
@@ -69,14 +105,15 @@ contract NFTTest is Test {
         assertEq(nft.baseURI(), "ipfs://0x1234567890");
     }
 
-    function testFail_UpdateBaseURIAsNotOwner() public {
-        vm.expectRevert("Ownable: caller is not the owner");
-        vm.startPrank(address(0xd3ad));
-        nft.setBaseURI("ipfs://0x1234567890");        
-        vm.stopPrank();
+    function test_UpdateBaseURIAsNotOwner() public {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xd3ad)));
+        vm.prank(address(0xd3ad));
+        nft.setBaseURI("ipfs://0x1234567890");                
     }
 
     function test_BalanceIncremented() public {
+        vm.startPrank(address(1));
+        vm.deal(address(1), 1 ether);
         nft.mintTo{value: 0.08 ether}(address(1));
         uint256 slotBalance = stdstore
             .target(address(nft))
@@ -94,10 +131,13 @@ contract NFTTest is Test {
             vm.load(address(nft), bytes32(slotBalance))
         );
         assertEq(balanceSecondMint, 2);
+        vm.stopPrank();
     }
 
     function test_SafeContractReceiver() public {
         Receiver receiver = new Receiver();
+        vm.startPrank(address(receiver));
+        vm.deal(address(receiver), 1 ether);
         nft.mintTo{value: 0.08 ether}(address(receiver));
         uint256 slotBalance = stdstore
             .target(address(nft))
@@ -107,6 +147,7 @@ contract NFTTest is Test {
 
         uint256 balance = uint256(vm.load(address(nft), bytes32(slotBalance)));
         assertEq(balance, 1);
+        vm.stopPrank();
     }
 
     function test_RevertUnSafeContractReceiver() public {
@@ -116,28 +157,37 @@ contract NFTTest is Test {
         nft.mintTo{value: 0.08 ether}(address(11));
     }
 
-    function test_WithdrawalWorksAsOwner() public {
-        // Mint an NFT, sending eth to the contract
-        Receiver receiver = new Receiver();
+    function test_WithdrawalWorksAsOwner() public {        
         address payable payee = payable(address(0x1337));
         uint256 priorPayeeBalance = payee.balance;
-        nft.mintTo{value: nft.MINT_PRICE()}(address(receiver));
+
+        // Mint an NFT, sending eth to the contract
+        vm.startPrank(address(2));
+        vm.deal(address(2), 1 ether);
+        nft.mintTo{value: nft.MINT_PRICE()}(address(2));
+        vm.stopPrank();
+
         // Check that the balance of the contract is correct
         assertEq(address(nft).balance, nft.MINT_PRICE());
         uint256 nftBalance = address(nft).balance;
+
         // Withdraw the balance and assert it was transferred
         nft.withdrawPayments(payee);
-        assertEq(payee.balance, priorPayeeBalance + nftBalance);
+        assertEq(payee.balance, priorPayeeBalance + nftBalance);        
     }
 
-    function testFail_WithdrawalAsNotOwner() public {
+    function test_WithdrawalAsNotOwner() public {
         // Mint an NFT, sending eth to the contract
         Receiver receiver = new Receiver();
-        nft.mintTo{value: nft.MINT_PRICE()}(address(receiver));
+        vm.startPrank(address(receiver));
+        vm.deal(address(receiver), 1 ether);
+        nft.mintTo{value: nft.MINT_PRICE()}(address(2));
         // Check that the balance of the contract is correct
         assertEq(address(nft).balance, nft.MINT_PRICE());
+        vm.stopPrank();
+
         // Confirm that a non-owner cannot withdraw
-        vm.expectRevert("Ownable: caller is not the owner");
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xd3ad)));
         vm.startPrank(address(0xd3ad));
         nft.withdrawPayments(payable(address(0xd3ad)));
         vm.stopPrank();

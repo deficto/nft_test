@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import "solmate/tokens/ERC721.sol";
-import "openzeppelin-contracts/contracts/utils/Strings.sol";
-import "openzeppelin-contracts/contracts/access/Ownable.sol";
+import "@solmate/tokens/ERC721.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import "@openzeppelin-contracts/contracts/utils/Strings.sol";
+import "@openzeppelin-contracts/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 error MintPriceNotPaid();
@@ -13,7 +14,7 @@ error NonExistentTokenURI();
 error NotInWhiteList();
 error WithdrawTransfer();
 
-contract NFT is ERC721, Ownable {
+contract NFT is ERC721, ERC721Royalty, Ownable {
     using Strings for uint256;
 
     string public baseURI;
@@ -27,8 +28,9 @@ contract NFT is ERC721, Ownable {
     uint256 public constant WL_SUPPLY = 1_000;
     uint256 public constant WL_MINT_PRICE = 0.04 ether;
 
-    constructor(string memory _name, string memory _symbol, string memory _baseURI) ERC721(_name, _symbol) Ownable(msg.sender) {
+    constructor(string memory _name, string memory _symbol, string memory _baseURI, bytes32 _merkleRoot) ERC721(_name, _symbol) Ownable(msg.sender) {
         baseURI = _baseURI;
+        merkleRoot = _merkleRoot;
     }
     
     function mintTo(address recipient) public payable returns (uint256) {
@@ -47,7 +49,9 @@ contract NFT is ERC721, Ownable {
         if (merkleRoot[0] == 0) {
             revert NoWhiteList();
         }
-
+        if (!verifyAddress(msg.sender, _proof)) {
+            revert NotInWhiteList();
+        }
         if (msg.value < WL_MINT_PRICE) {
             revert MintPriceNotPaid();
         }
@@ -86,8 +90,8 @@ contract NFT is ERC721, Ownable {
         }
     }
 
-    function verifyAddress(bytes32[] calldata _merkleProof) private view returns (bool) {
-        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+    function verifyAddress(address recipient, bytes32[] calldata _merkleProof) private view returns (bool) {
+        bytes32 leaf = keccak256(abi.encodePacked(recipient));
         return MerkleProof.verify(_merkleProof, merkleRoot, leaf);
     }
 }
